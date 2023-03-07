@@ -25,14 +25,14 @@ import { RemoteInterpreter } from './remote_interpreter';
 
 const logger = getLogger('pyscript/main');
 
-const old_val = Synclink.transferHandlers.get("throw").serialize
-function new_val({value}) {
-    const result = old_val({value});
+const old_val = Synclink.transferHandlers.get('throw').serialize;
+function new_val({ value }) {
+    const result = old_val({ value });
     // @ts-ignore
     result[0].value.$$isUserError = value.$$isUserError;
     return result;
 }
-Synclink.transferHandlers.get("throw").serialize = new_val
+Synclink.transferHandlers.get('throw').serialize = new_val;
 
 /* High-level overview of the lifecycle of a PyScript App:
 
@@ -74,7 +74,10 @@ export class PyScriptApp {
     PyScript: ReturnType<typeof make_PyScript>;
     plugins: PluginManager;
     _stdioMultiplexer: StdioMultiplexer;
-    tagExecutionLock: ReturnType<typeof createLock>; // this is used to ensure that py-script tags are executed sequentially
+    tagExecutionLock: () => Promise<() => void>; // this is used to ensure that py-script tags are executed sequentially
+    numPendingTags: number;
+    scriptTagsPromise: Promise<void>;
+    resolvedScriptTags: () => void;
 
     constructor() {
         // initialize the builtin plugins
@@ -86,6 +89,8 @@ export class PyScriptApp {
 
         this.plugins.add(new StdioDirector(this._stdioMultiplexer));
         this.tagExecutionLock = createLock();
+        this.numPendingTags = 0;
+        this.scriptTagsPromise = new Promise(res => (this.resolvedScriptTags = res));
     }
 
     // Error handling logic: if during the execution we encounter an error
@@ -98,6 +103,17 @@ export class PyScriptApp {
             this._realMain();
         } catch (error) {
             this._handleUserErrorMaybe(error);
+        }
+    }
+
+    incrementNumPendingTags() {
+        this.numPendingTags += 1;
+    }
+
+    decrementNumPendingTags() {
+        this.numPendingTags -= 1;
+        if (this.numPendingTags === 0) {
+            this.resolvedScriptTags();
         }
     }
 
@@ -159,7 +175,12 @@ export class PyScriptApp {
         port2.start();
         Synclink.expose(remote_interpreter, port2);
         const wrapped_remote_interpreter = Synclink.wrap(port1);
-        this.interpreter = new InterpreterClient(this.config, this._stdioMultiplexer, wrapped_remote_interpreter as Synclink.Remote<RemoteInterpreter>, remote_interpreter);
+        this.interpreter = new InterpreterClient(
+            this.config,
+            this._stdioMultiplexer,
+            wrapped_remote_interpreter as Synclink.Remote<RemoteInterpreter>,
+            remote_interpreter,
+        );
 
         this.logStatus(`Downloading ${interpreter_cfg.name}...`);
 
@@ -172,7 +193,7 @@ export class PyScriptApp {
         const script = document.createElement('script'); // create a script DOM node
         script.src = await this.interpreter._remote.src;
         script.addEventListener('load', () => {
-            this.afterInterpreterLoad(this.interpreter).catch(async (error) => {
+            this.afterInterpreterLoad(this.interpreter).catch(async error => {
                 await this._handleUserErrorMaybe(error);
             });
         });
@@ -201,7 +222,7 @@ export class PyScriptApp {
         //Refresh module cache in case plugins have modified the filesystem
         await interpreter._remote.invalidate_module_path_cache();
         this.logStatus('Executing <py-script> tags...');
-        this.executeScripts(interpreter);
+        await this.executeScripts(interpreter);
 
         this.logStatus('Initializing web components...');
         // lifecycle (8)
@@ -233,8 +254,8 @@ export class PyScriptApp {
         // inject `define_custom_element` and showWarning it into the PyScript
         // module scope
         const pyscript_module = await interpreter.pyimport('pyscript');
-        await interpreter._remote.setHandler("define_custom_element", Synclink.proxy(define_custom_element));
-        await interpreter._remote.setHandler("showWarning", Synclink.proxy(showWarning));
+        await interpreter._remote.setHandler('define_custom_element', Synclink.proxy(define_custom_element));
+        await interpreter._remote.setHandler('showWarning', Synclink.proxy(showWarning));
         await pyscript_module._set_version_info(version);
         pyscript_module.destroy();
 
@@ -373,10 +394,13 @@ modules must contain a "plugin" attribute. For more information check the plugin
     }
 
     // lifecycle (7)
-    executeScripts(interpreter: InterpreterClient) {
+    async executeScripts(interpreter: InterpreterClient) {
         // make_PyScript takes an interpreter and a PyScriptApp as arguments
         this.PyScript = make_PyScript(interpreter, this);
         customElements.define('py-script', this.PyScript);
+        this.incrementNumPendingTags();
+        this.decrementNumPendingTags();
+        await this.scriptTagsPromise;
     }
 
     // ================= registraton API ====================
