@@ -93,10 +93,10 @@ export class PluginManager {
         this._pythonPlugins.push(plugin);
     }
 
-    configure(config: AppConfig) {
+    async configure(config: AppConfig) {
         for (const p of this._plugins) p.configure?.(config);
 
-        for (const p of this._pythonPlugins) p.configure?.(config);
+        for (const p of this._pythonPlugins) await p.configure?.(config);
     }
 
     beforeLaunch(config: AppConfig) {
@@ -109,7 +109,7 @@ export class PluginManager {
         }
     }
 
-    afterSetup(interpreter: InterpreterClient) {
+    async afterSetup(interpreter: InterpreterClient) {
         for (const p of this._plugins) {
             try {
                 p.afterSetup?.(interpreter);
@@ -118,31 +118,36 @@ export class PluginManager {
             }
         }
 
-        for (const p of this._pythonPlugins) p.afterSetup?.(interpreter);
+        for (const p of this._pythonPlugins) await p.afterSetup?.(interpreter);
     }
 
-    afterStartup(interpreter: InterpreterClient) {
+    async afterStartup(interpreter: InterpreterClient) {
         for (const p of this._plugins) p.afterStartup?.(interpreter);
 
-        for (const p of this._pythonPlugins) p.afterStartup?.(interpreter);
+        for (const p of this._pythonPlugins) await p.afterStartup?.(interpreter);
     }
 
-    beforePyScriptExec(options: { interpreter: InterpreterClient; src: string; pyScriptTag: PyScriptTag }) {
+    async beforePyScriptExec(options: { interpreter: InterpreterClient; src: string; pyScriptTag: PyScriptTag }) {
         for (const p of this._plugins) p.beforePyScriptExec?.(options);
 
-        for (const p of this._pythonPlugins) p.beforePyScriptExec?.callKwargs(options);
+        for (const p of this._pythonPlugins) await p.beforePyScriptExec(options.interpreter, options.src, options.pyScriptTag);
     }
 
-    afterPyScriptExec(options: { interpreter: InterpreterClient; src: string; pyScriptTag: PyScriptTag; result: any }) {
+    async afterPyScriptExec(options: {
+        interpreter: InterpreterClient;
+        src: string;
+        pyScriptTag: PyScriptTag;
+        result: any;
+    }) {
         for (const p of this._plugins) p.afterPyScriptExec?.(options);
 
-        for (const p of this._pythonPlugins) p.afterPyScriptExec?.callKwargs(options);
+        for (const p of this._pythonPlugins) await p.afterPyScriptExec(options.interpreter, options.src, options.pyScriptTag, options.result);
     }
 
-    onUserError(error: UserError) {
+    async onUserError(error: UserError) {
         for (const p of this._plugins) p.onUserError?.(error);
 
-        for (const p of this._pythonPlugins) p.onUserError?.(error);
+        for (const p of this._pythonPlugins) await p.onUserError?.(error);
     }
 }
 
